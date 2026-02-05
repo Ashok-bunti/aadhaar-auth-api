@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+jinja2
+deepface
+pdf2image
+pillow
+python-multipart
+pyzbar
+opencv-python
+lxml
+PyPDF2
+motor
+dnspython
