@@ -6,7 +6,7 @@ pdf2image
 pillow
 python-multipart
 pyzbar
-opencv-python
+opencv-python-headless
 lxml
 PyPDF2
 motor
