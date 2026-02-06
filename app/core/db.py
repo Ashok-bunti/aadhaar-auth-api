@@ -2,7 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 
 # MongoDB Connection String
-MONGODB_URL = "mongodb+srv://selvamashok1310_db_user:p4u3FUhj4KNmyr0x@cluster0.9lrvakf.mongodb.net/"
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb+srv://selvamashok1310_db_user:p4u3FUhj4KNmyr0x@cluster0.9lrvakf.mongodb.net/")
 DATABASE_NAME = "aadhaar_kyc_db"
 
 client = AsyncIOMotorClient(MONGODB_URL)
