@@ -11,3 +11,4 @@ lxml
 PyPDF2
 motor
 dnspython
+tf-keras
