@@ -6,7 +6,8 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 try:
     from deepface import DeepFace
     HAS_DEEPFACE = True
-except ImportError:
+except ImportError as e:
+    print(f"DEBUG: DeepFace import failed: {e}")
     HAS_DEEPFACE = False
 
 try:

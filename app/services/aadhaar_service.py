@@ -176,6 +176,65 @@ def extract_aadhaar_data(image_path):
     except Exception:
         return {"is_aadhaar": False}
 
+async def _parse_aadhaar_xml(xml_content, file_path):
+    root = etree.fromstring(xml_content)
+    
+    # Extract standard attributes
+    uid = root.get('uid', 'N/A')
+    name = root.get('name', 'N/A')
+    gender_code = root.get('gender', 'M')
+    dob = root.get('dob', 'N/A')
+    
+    # Address Construction
+    house = root.get('house', '')
+    street = root.get('street', '')
+    vtc = root.get('vtc', '')
+    dist = root.get('dist', '')
+    state = root.get('state', '')
+    pc = root.get('pc', '')
+    full_address = ", ".join(filter(None, [house, street, vtc, dist, state, pc]))
+
+    # --- PHOTO EXTRACTION (Double Check Strategy) ---
+    photo_b64 = root.get('photo', '')
+    if not photo_b64:
+        # Try finding the <Pht> tag (Standard format)
+        pht_tag = root.find('.//Pht') or root.find('.//{http://www.uidai.gov.in/authentication/uid-auth-request/1.0}Pht')
+        if pht_tag is not None:
+            photo_b64 = pht_tag.text
+
+    photo_path = None
+    if photo_b64:
+        try:
+            photo_data = base64.b64decode(photo_b64)
+            photo_path = os.path.join(SAVE_DIR, f"offline_{uuid.uuid4()}.jpg")
+            with open(photo_path, "wb") as photo_file:
+                photo_file.write(photo_data)
+        except Exception:
+            photo_path = None # Fail gracefully if image is corrupt
+
+    score, status, _ = calculate_address_perfection({"pincode": pc, "state": state, "address": full_address})
+
+    details = {
+        "is_aadhaar": True,
+        "uid": f"XXXX XXXX {uid[-4:]}" if len(uid) >= 4 else uid,
+        "full_name": name,
+        "gender": "Male" if gender_code == "M" else "Female",
+        "dob": dob,
+        "address": full_address,
+        "pincode": pc,
+        "perfection_score": score,
+        "address_status": status
+    }
+
+    # SAVE TO MONGODB
+    photo_result = await save_to_db("offline_xml_zip", details, file_path, photo_path)
+
+    return {
+        "status": "success",
+        "aadhaar_photo": photo_result or "https://placehold.co/400x400?text=No+Photo",
+        "details": details
+    }
+
 async def process_offline_xml(file: UploadFile, password: str):
     file_ext = file.filename.lower().split('.')[-1]
     file_path = os.path.join(SAVE_DIR, f"{uuid.uuid4()}.{file_ext}")
@@ -183,7 +242,13 @@ async def process_offline_xml(file: UploadFile, password: str):
         buffer.write(await file.read())
     
     try:
-        if file_ext == 'zip':
+        if file_ext == 'xml':
+            with open(file_path, "rb") as f:
+                xml_content = f.read()
+            # Direct XML parsing
+            return await _parse_aadhaar_xml(xml_content, file_path)
+
+        elif file_ext == 'zip':
             with zipfile.ZipFile(file_path, 'r') as zip_ref:
                 xml_files = [f for f in zip_ref.namelist() if f.endswith('.xml')]
                 if not xml_files: raise HTTPException(status_code=400, detail="No XML file found in ZIP")
@@ -192,49 +257,8 @@ async def process_offline_xml(file: UploadFile, password: str):
                 except RuntimeError:
                     raise HTTPException(status_code=400, detail="Incorrect password.")
             
-            root = etree.fromstring(xml_content)
-            uid = root.get('uid', 'N/A')
-            name = root.get('name', 'N/A')
-            gender_code = root.get('gender', 'M')
-            dob = root.get('dob', 'N/A')
-            house = root.get('house', '')
-            street = root.get('street', '')
-            vtc = root.get('vtc', '')
-            dist = root.get('dist', '')
-            state = root.get('state', '')
-            pc = root.get('pc', '')
-            full_address = ", ".join(filter(None, [house, street, vtc, dist, state, pc]))
-            
-            photo_b64 = root.get('photo', '')
-            photo_path = None
-            if photo_b64:
-                photo_data = base64.b64decode(photo_b64)
-                photo_path = os.path.join(SAVE_DIR, f"offline_{uuid.uuid4()}.jpg")
-                with open(photo_path, "wb") as photo_file:
-                    photo_file.write(photo_data)
-            
-            score, status, _ = calculate_address_perfection({"pincode": pc, "state": state, "address": full_address})
-            
-            details = {
-                "is_aadhaar": True,
-                "uid": f"XXXX XXXX {uid[-4:]}",
-                "full_name": name,
-                "gender": "Male" if gender_code == "M" else "Female",
-                "dob": dob,
-                "address": full_address,
-                "pincode": pc,
-                "perfection_score": score,
-                "address_status": status
-            }
-
-            # SAVE TO MONGODB (Converts to Base64 and deletes local file)
-            photo_result = await save_to_db("offline_xml_zip", details, file_path, photo_path)
-
-            return {
-                "status": "success",
-                "aadhaar_photo": photo_result or "https://placehold.co/400x400?text=No+Photo",
-                "details": details
-            }
+            # Use the shared parser helper
+            return await _parse_aadhaar_xml(xml_content, file_path)
         
         else:  # PDF
             reader = PdfReader(file_path)
@@ -301,11 +325,14 @@ async def process_offline_xml(file: UploadFile, password: str):
                             face_img = cv2.cvtColor(face_img, cv2.COLOR_RGB2BGR)
                             if cv2.imwrite(temp_face_path, face_img):
                                 # If extraction successful, we can delete the full page image now
-                                if os.path.exists(image_path):
-                                    try: os.remove(image_path)
-                                    except: pass
+                                try: 
+                                    if os.path.exists(image_path):
+                                        os.remove(image_path)
+                                except: pass
                                 face_path = temp_face_path
-                        except: pass
+                        except Exception as e:
+                            print(f"DeepFace extraction failed: {e}")
+                            pass
                     
                     if not pdf_data.get("address") or pdf_data["address"] == "N/A":
                         ocr_details = extract_aadhaar_data(image_path)
